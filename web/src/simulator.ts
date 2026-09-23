@@ -42,7 +42,7 @@ export class PicoSimulator {
     return JSON.stringify({
       t: 'hello',
       v: PROTOCOL_VERSION,
-      fw: '0.1.0-sim',
+      fw: '0.2.0-sim',
       board: 'simulator',
       uid: 'sim-0000000000000137',
       mpy: 'simulated in the browser',
@@ -130,23 +130,30 @@ export class PicoSimulator {
     if (typeof msg !== 'object' || msg === null || !('cmd' in msg)) {
       return [JSON.stringify({ t: 'err', msg: 'missing cmd' })];
     }
+    if (typeof msg.cmd !== 'string') return [JSON.stringify({ t: 'err', msg: 'cmd must be a string' })];
     switch (msg.cmd) {
       case 'led':
+        if (msg.on !== undefined && msg.on !== null && typeof msg.on !== 'boolean') {
+          return [JSON.stringify({ t: 'err', msg: 'on must be true or false', cmd: 'led' })];
+        }
         this.led = typeof msg.on === 'boolean' ? msg.on : !this.led;
         this.blinkLeft = 0;
         return [JSON.stringify({ t: 'ack', cmd: 'led', on: this.led })];
       case 'rate': {
-        const hz = Number(msg.hz);
-        if (!Number.isFinite(hz)) return [JSON.stringify({ t: 'err', msg: 'hz must be a number', cmd: 'rate' })];
+        const hz = msg.hz;
+        if (typeof hz !== 'number' || !Number.isFinite(hz)) return [JSON.stringify({ t: 'err', msg: 'hz must be a number', cmd: 'rate' })];
         if (hz < MIN_HZ || hz > MAX_HZ) {
           return [JSON.stringify({ t: 'err', msg: `hz out of range ${MIN_HZ}..${MAX_HZ}`, cmd: 'rate' })];
         }
         this.hz = hz;
-        this.nextSample = now + 1000 / hz;
+        this.nextSample = now; // restart the schedule, like the firmware
         return [JSON.stringify({ t: 'ack', cmd: 'rate', hz })];
       }
       case 'blink': {
-        const n = Number.isInteger(msg.n) && (msg.n as number) >= 1 && (msg.n as number) <= 20 ? (msg.n as number) : 3;
+        const n = msg.n === undefined ? 3 : msg.n;
+        if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 20) {
+          return [JSON.stringify({ t: 'err', msg: 'n must be an integer 1..20', cmd: 'blink' })];
+        }
         this.blinkLeft = n * 2;
         this.nextBlink = now;
         return [JSON.stringify({ t: 'ack', cmd: 'blink', n })];
@@ -160,7 +167,7 @@ export class PicoSimulator {
         this.adcAvg = [];
         return [JSON.stringify({ t: 'ack', cmd: 'reset_stats' })];
       default:
-        return [JSON.stringify({ t: 'err', msg: 'unknown cmd', cmd: String(msg.cmd) })];
+        return [JSON.stringify({ t: 'err', msg: 'unknown cmd', cmd: msg.cmd })];
     }
   }
 }

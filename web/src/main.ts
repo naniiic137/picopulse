@@ -1,15 +1,20 @@
 import './style.css';
 import { TimeChart } from './chart';
-import { toCsv, type Row } from './csv';
+import { toCsv } from './csv';
 import { LineParser } from './lineParser';
 import { encodeCommand, parseLine, type Command, type DeviceMsg, type HelloMsg, type TelemetryMsg } from './protocol';
 import { Series, ThresholdAlert, measuredRate } from './stats';
+import { AnnounceThrottle, RedrawGate, RowBuffer, SeqTracker, formatUptime, nearestRateIndex } from './session';
 import { SerialTransport, SimTransport, isWebSerialSupported, type Transport } from './transport';
 
 // ------------------------------------------------------------------ config
 const WINDOW_MS = 60_000;
 const HISTORY = 20 * 300; // 5 minutes at the maximum rate of 20 Hz
-const MAX_ROWS = 200_000; // CSV rows kept in memory (~3 h at 20 Hz)
+// CSV rows kept in memory: the last 30 minutes, at most 30 min x 20 Hz rows.
+const ROW_MAX_AGE_MS = 30 * 60_000;
+const ROW_CAPACITY = 20 * 60 * 30;
+const MAX_CHART_FPS = 30;
+const ANNOUNCE_GAP_MS = 5000; // at most one screen-reader announcement per 5 s
 const RATES = [0.2, 0.5, 1, 2, 5, 10, 20];
 const COLORS = { temp: '#ffb547', adc: '#4cc9f0', mem: '#a78bfa' };
 
@@ -39,6 +44,7 @@ const el = {
   adcNote: $('adc-note'),
   cardTemp: $('card-temp'),
   raw: $('raw'),
+  announcer: $('announcer'),
 };
 
 // ------------------------------------------------------------------- state
@@ -46,16 +52,32 @@ const parser = new LineParser();
 const series = { temp: new Series(HISTORY), adc: new Series(HISTORY), mem: new Series(HISTORY) };
 const alert = new ThresholdAlert(loadThreshold());
 let transport: Transport | null = null;
-let rows: Row[] = [];
+const rows = new RowBuffer(ROW_CAPACITY, ROW_MAX_AGE_MS);
+const seqs = new SeqTracker();
+const redraw = new RedrawGate(MAX_CHART_FPS);
 let hello: HelloMsg | null = null;
 let last: TelemetryMsg | null = null;
-let lastSeq: number | null = null;
 let lastHbAt = 0;
 let arrivals: number[] = [];
-let counts = { ok: 0, bad: 0, lost: 0 };
+let counts = { ok: 0, bad: 0 };
 let paused = false;
 let pausedAt = 0;
-let dirty = true;
+let dirty = true; // text panels need a refresh
+
+/** Something changed: repaint the charts (rate-limited) and the text panels. */
+function invalidate(): void {
+  dirty = true;
+  redraw.markDirty();
+}
+
+// Only alerts are announced to screen readers (the event log and the serial
+// monitor are not live regions), politely and at most once per ANNOUNCE_GAP_MS.
+let lastAnnounced = '';
+const announcer = new AnnounceThrottle(ANNOUNCE_GAP_MS, (text) => {
+  // Re-setting identical text is not announced again; make it differ.
+  lastAnnounced = text === lastAnnounced ? `${text} ` : text;
+  el.announcer.textContent = lastAnnounced;
+});
 
 const fmt1 = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : '--');
 const charts = {
@@ -103,13 +125,20 @@ async function startTransport(next: Transport): Promise<void> {
   transport = next;
   setStatus('connecting', next.kind === 'sim' ? 'Starting simulator' : 'Connecting');
   try {
-    await next.start(onText, (reason) => {
-      if (transport !== next) return;
-      transport = null;
-      logEvent('warn', `Link closed: ${reason ?? 'unknown reason'}`);
-      setStatus('idle', 'Disconnected');
-      updateControls();
-    });
+    await next.start(
+      onText,
+      (reason) => {
+        if (transport !== next) return;
+        transport = null;
+        logEvent('warn', `Link closed: ${reason ?? 'unknown reason'}`);
+        announcer.say('Device disconnected');
+        setStatus('idle', 'Disconnected');
+        updateControls();
+      },
+      (warning) => {
+        if (transport === next) logEvent('warn', warning);
+      },
+    );
   } catch (err) {
     transport = null;
     setStatus('idle', 'Disconnected');
@@ -179,7 +208,7 @@ function handleMessage(msg: DeviceMsg): void {
   switch (msg.t) {
     case 'hello':
       hello = msg;
-      el.rate.value = String(nearestRateIndex(msg.hz));
+      el.rate.value = String(nearestRateIndex(RATES, msg.hz));
       el.rateOut.textContent = `${msg.hz} Hz`;
       logEvent('info', `Hello from ${msg.board} (fw ${msg.fw})`);
       break;
@@ -197,13 +226,11 @@ function handleMessage(msg: DeviceMsg): void {
       logEvent('error', `Device error: ${msg.msg}${msg.cmd ? ` (${msg.cmd})` : ''}`);
       break;
   }
-  dirty = true;
+  invalidate();
 }
 
 function onTelemetry(msg: TelemetryMsg, now: number): void {
-  if (lastSeq !== null && msg.seq > lastSeq + 1) counts.lost += msg.seq - lastSeq - 1;
-  if (lastSeq !== null && msg.seq < lastSeq) logEvent('warn', 'Sequence restarted (device reset?)');
-  lastSeq = msg.seq;
+  if (seqs.update(msg.seq) === 'restart') logEvent('warn', 'Sequence restarted (device reset?)');
   last = msg;
   arrivals.push(now);
   if (arrivals.length > 40) arrivals.shift();
@@ -212,17 +239,27 @@ function onTelemetry(msg: TelemetryMsg, now: number): void {
   if (msg.temp !== null) series.temp.push(now, msg.temp);
   if (msg.adc0 !== null) series.adc.push(now, msg.adc0 * 100);
   if (msg.mem !== undefined) series.mem.push(now, msg.mem / 1024);
-  if (rows.length < MAX_ROWS) rows.push({ received: Date.now(), msg });
+  rows.push({ received: Date.now(), msg });
 
   const change = alert.update(msg.temp);
-  if (change === 'raised') logEvent('alert', `Temperature ${msg.temp?.toFixed(1)} °C crossed ${alert.threshold} °C`);
-  if (change === 'cleared') logEvent('ok', `Temperature back to ${msg.temp?.toFixed(1)} °C`);
+  if (change === 'raised') {
+    const text = `Temperature ${msg.temp?.toFixed(1)} °C crossed ${alert.threshold} °C`;
+    logEvent('alert', text);
+    announcer.say(`Alert: ${text}`);
+  }
+  if (change === 'cleared') {
+    const text = `Temperature back to ${msg.temp?.toFixed(1)} °C`;
+    logEvent('ok', text);
+    announcer.say(text);
+  }
 }
 
 // -------------------------------------------------------------- rendering
-function frame(): void {
+function frame(time: number): void {
   const now = paused ? pausedAt : performance.now();
-  if (transport || dirty) {
+  // Repaint only when new data arrived (capped at MAX_CHART_FPS), plus a
+  // slow scroll refresh while streaming - not 60 times a second regardless.
+  if (redraw.shouldDraw(time, !!transport && !paused)) {
     charts.temp.draw(series.temp, now);
     charts.adc.draw(series.adc, now);
     charts.mem.draw(series.mem, now);
@@ -271,12 +308,12 @@ function renderText(now: number): void {
   setText('i-link', transport ? transport.label : '—');
   setText('i-uptime', last ? formatUptime(last.ms) : '—');
   setText('i-rate', last ? `${measuredRate(arrivals).toFixed(1)} Hz measured` : '—');
-  setText('i-msgs', transport || counts.ok ? `${counts.ok} ok · ${counts.bad} bad · ${counts.lost} lost` : '—');
+  setText('i-msgs', transport || counts.ok ? `${counts.ok} ok · ${counts.bad} bad · ${seqs.lost} lost` : '—');
   setText('i-hb', lastHbAt ? `${((performance.now() - lastHbAt) / 1000).toFixed(0)} s ago` : '—');
   if (last) {
     el.led.setAttribute('aria-checked', String(!!last.led));
   }
-  el.rows.textContent = `${rows.length.toLocaleString('en-US')} rows`;
+  el.rows.textContent = `${rows.length.toLocaleString('en-US')} rows${rows.dropped ? ' (last 30 min)' : ''}`;
   el.csv.disabled = rows.length === 0;
 }
 
@@ -306,7 +343,7 @@ function updateControls(): void {
   el.disconnect.hidden = !live;
   el.disconnect.textContent = transport?.kind === 'sim' ? 'Stop simulator' : 'Disconnect';
   el.connect.disabled = !isWebSerialSupported();
-  dirty = true;
+  invalidate();
 }
 
 type LogKind = 'info' | 'ok' | 'warn' | 'error' | 'alert' | 'cmd';
@@ -325,16 +362,16 @@ function logEvent(kind: LogKind, text: string): void {
 function resetSession(): void {
   parser.reset();
   for (const s of Object.values(series)) s.clear();
-  rows = [];
+  rows.clear();
   hello = null;
   last = null;
-  lastSeq = null;
+  seqs.reset();
   lastHbAt = 0;
   arrivals = [];
-  counts = { ok: 0, bad: 0, lost: 0 };
+  counts = { ok: 0, bad: 0 };
   alert.active = false;
   el.raw.replaceChildren();
-  dirty = true;
+  invalidate();
 }
 
 function showError(text: string): void {
@@ -387,22 +424,6 @@ function shortMpy(v: string): string {
   return m ? m[1] : v;
 }
 
-function formatUptime(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
-  const ss = String(s % 60).padStart(2, '0');
-  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
-}
-
-function nearestRateIndex(hz: number): number {
-  let best = 0;
-  RATES.forEach((r, i) => {
-    if (Math.abs(r - hz) < Math.abs(RATES[best] - hz)) best = i;
-  });
-  return best;
-}
-
 function loadThreshold(): number {
   try {
     const v = Number(localStorage.getItem('picopulse.threshold'));
@@ -448,7 +469,7 @@ el.threshold.addEventListener('change', () => {
     /* storage unavailable: keep the value for this session only */
   }
   logEvent('info', `Alert threshold set to ${v} °C`);
-  dirty = true;
+  invalidate();
 });
 
 el.pause.addEventListener('click', () => {
@@ -457,20 +478,22 @@ el.pause.addEventListener('click', () => {
   el.pause.setAttribute('aria-pressed', String(paused));
   el.pause.textContent = paused ? 'Resume' : 'Pause';
   logEvent('info', paused ? 'Paused - incoming samples are not recorded' : 'Resumed');
-  dirty = true;
+  invalidate();
 });
 el.clear.addEventListener('click', () => {
   for (const s of Object.values(series)) s.clear();
-  rows = [];
-  counts = { ok: 0, bad: 0, lost: 0 };
+  rows.clear();
+  counts = { ok: 0, bad: 0 };
+  seqs.lost = 0;
   alert.active = false;
   el.log.replaceChildren();
   el.raw.replaceChildren();
-  dirty = true;
+  invalidate();
 });
 el.csv.addEventListener('click', () => {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  download(`picopulse-${stamp}.csv`, toCsv(rows));
+  rows.trim(Date.now());
+  download(`picopulse-${stamp}.csv`, toCsv(rows.toArray()));
   logEvent('info', `Exported ${rows.length} rows to CSV`);
 });
 

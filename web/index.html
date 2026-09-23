@@ -77,7 +77,7 @@
             </header>
             <div class="chart-wrap">
               <canvas id="chart-adc" aria-label="ADC0 over the last 60 seconds" role="img"></canvas>
-              <div class="chart-note" id="adc-note" hidden>Nothing wired to GP26 &mdash; see the wiring guide.</div>
+              <div class="chart-note" id="adc-note" hidden>No ADC0 data: nothing is wired to GP26, or <code>ADC0_MODE</code> is <code>"off"</code> in main.py (the default). See the wiring guide.</div>
             </div>
             <footer class="stats compact">
               <div><span class="k">Min</span><span class="v" id="adc-min">--</span></div>
@@ -110,7 +110,7 @@
             <h2>Serial monitor</h2>
             <span class="muted">newline-delimited JSON &middot; <span class="rx">&larr; device</span> <span class="tx">&rarr; host</span></span>
           </div>
-          <div id="raw" class="raw" role="log" aria-label="Raw serial lines"></div>
+          <div id="raw" class="raw" role="log" aria-live="off" aria-label="Raw serial lines"></div>
         </article>
       </section>
 
@@ -154,7 +154,7 @@
             <h2>Alerts &amp; events</h2>
             <span id="alert-chip" class="chip ok">Normal</span>
           </div>
-          <ol id="log" class="log" aria-live="polite"></ol>
+          <ol id="log" class="log" aria-label="Event log"></ol>
         </article>
 
         <article class="card" id="card-device">
@@ -186,6 +186,9 @@
         </article>
       </aside>
     </main>
+
+    <!-- The only live region: threshold alerts and disconnects, throttled in main.ts. -->
+    <div id="announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <footer class="foot">
       <span>PicoPulse &middot; protocol v1 &middot; data stays in your browser</span>

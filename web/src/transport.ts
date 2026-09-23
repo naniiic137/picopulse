@@ -4,7 +4,15 @@ import { PicoSimulator, mulberry32 } from './simulator';
 export interface Transport {
   readonly kind: 'serial' | 'sim';
   readonly label: string;
-  start(onText: (chunk: string) => void, onClose: (reason?: string) => void): Promise<void>;
+  /**
+   * `onClose` fires once when the link ends without close() being called.
+   * `onWarn` reports problems the transport recovered from by itself.
+   */
+  start(
+    onText: (chunk: string) => void,
+    onClose: (reason?: string) => void,
+    onWarn?: (message: string) => void,
+  ): Promise<void>;
   send(line: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -14,14 +22,42 @@ export const isWebSerialSupported = (): boolean => typeof navigator !== 'undefin
 /** Raspberry Pi's USB vendor ID, used by MicroPython on the Pico / Pico W. */
 const RPI_VENDOR_ID = 0x2e8a;
 
+/**
+ * Read buffer size passed to port.open(). The default (255 bytes) overruns
+ * easily when the tab is busy; 64 KiB holds many seconds of telemetry.
+ */
+export const READ_BUFFER_SIZE = 64 * 1024;
+
+/** Give up after this many read errors in a row without any data in between. */
+export const MAX_READ_RETRIES = 5;
+
+/** How long close() waits for queued commands before releasing the writer. */
+const CLOSE_FLUSH_MS = 200;
+
+/** The part of the Web Serial SerialPort that the transport uses (a fake in tests). */
+export type SerialPortLike = Pick<SerialPort, 'readable' | 'writable' | 'open' | 'close' | 'setSignals' | 'getInfo'>;
+
+const errorName = (err: unknown): string =>
+  err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 export class SerialTransport implements Transport {
   readonly kind = 'serial';
   label = 'USB serial';
-  private port: SerialPort | null = null;
+  private port: SerialPortLike | null;
   private reader: ReadableStreamDefaultReader<string> | null = null;
-  private readableClosed: Promise<void> | null = null;
+  /** One writer for the whole connection: getWriter() per send throws "locked" when sends overlap. */
+  private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  /** Sends are chained so they reach the device in call order, one at a time. */
+  private sendQueue: Promise<unknown> = Promise.resolve();
+  private readLoop: Promise<void> | null = null;
   private closing = false;
   private readonly encoder = new TextEncoder();
+
+  constructor(port: SerialPortLike | null = null) {
+    this.port = port;
+  }
 
   /** Must be called from a user gesture (click): shows the browser's port picker. */
   async request(showAllPorts = false): Promise<void> {
@@ -35,63 +71,107 @@ export class SerialTransport implements Transport {
     }
   }
 
-  async start(onText: (chunk: string) => void, onClose: (reason?: string) => void): Promise<void> {
+  async start(
+    onText: (chunk: string) => void,
+    onClose: (reason?: string) => void,
+    onWarn?: (message: string) => void,
+  ): Promise<void> {
     const port = this.port;
     if (!port) throw new Error('No port selected');
     // USB CDC ignores the baud rate, but the API requires one.
-    await port.open({ baudRate: 115200 });
+    await port.open({ baudRate: 115200, bufferSize: READ_BUFFER_SIZE });
     // MicroPython only sends to a host that has asserted DTR.
     await port.setSignals({ dataTerminalReady: true }).catch(() => undefined);
-    if (!port.readable) throw new Error('Port is not readable');
+    if (!port.readable || !port.writable) {
+      await port.close().catch(() => undefined);
+      throw new Error('Port is not readable');
+    }
+    this.closing = false;
+    this.writer = port.writable.getWriter();
+    this.sendQueue = Promise.resolve();
+    this.readLoop = this.runReadLoop(port, onText, onWarn).then(async (reason) => {
+      if (this.closing) return;
+      await this.teardown();
+      onClose(reason);
+    });
+  }
 
-    const decoder = new TextDecoderStream();
-    this.readableClosed = port.readable.pipeTo(decoder.writable as WritableStream<Uint8Array>).catch(() => undefined);
-    this.reader = decoder.readable.getReader();
-
-    const reader = this.reader;
-    void (async () => {
-      let reason: string | undefined;
+  /**
+   * Reads until the port goes away. Web Serial replaces port.readable with a
+   * fresh stream after a non-fatal error (buffer overrun, framing / parity
+   * error, break) and sets it to null after a fatal one (device unplugged),
+   * so the outer loop reopens the reader for the first kind only.
+   */
+  private async runReadLoop(
+    port: SerialPortLike,
+    onText: (chunk: string) => void,
+    onWarn?: (message: string) => void,
+  ): Promise<string> {
+    let failures = 0;
+    let lastError: string | undefined;
+    while (port.readable && !this.closing) {
+      const decoder = new TextDecoderStream();
+      const piped = port.readable.pipeTo(decoder.writable as WritableStream<Uint8Array>).catch(() => undefined);
+      const reader = decoder.readable.getReader();
+      this.reader = reader;
+      let ended = false;
       try {
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) break;
-          if (value) onText(value);
+          if (done) {
+            ended = true;
+            break;
+          }
+          if (value) {
+            failures = 0;
+            onText(value);
+          }
         }
       } catch (err) {
         // Unplugging the board lands here with a NetworkError.
-        reason = err instanceof Error ? err.message : String(err);
+        lastError = errorName(err);
+        failures++;
       } finally {
         reader.releaseLock();
-        if (!this.closing) {
-          await this.teardown();
-          onClose(reason ?? 'device disconnected');
-        }
+        this.reader = null;
+        await piped;
       }
-    })();
+      if (ended || this.closing) break;
+      if (failures > MAX_READ_RETRIES) {
+        lastError = `${lastError} (gave up after ${MAX_READ_RETRIES} retries)`;
+        break;
+      }
+      if (port.readable) onWarn?.(`Serial read error (${lastError}), reading resumed`);
+    }
+    return lastError ?? 'device disconnected';
   }
 
-  async send(line: string): Promise<void> {
-    const writable = this.port?.writable;
-    if (!writable) throw new Error('Not connected');
-    const writer = writable.getWriter();
-    try {
-      await writer.write(this.encoder.encode(line));
-    } finally {
-      writer.releaseLock();
-    }
+  send(line: string): Promise<void> {
+    const writer = this.writer;
+    if (!writer) return Promise.reject(new Error('Not connected'));
+    const bytes = this.encoder.encode(line);
+    const result = this.sendQueue.then(() => writer.write(bytes));
+    this.sendQueue = result.catch(() => undefined);
+    return result;
   }
 
   async close(): Promise<void> {
     this.closing = true;
     await this.reader?.cancel().catch(() => undefined);
+    await this.readLoop;
     await this.teardown();
   }
 
   private async teardown(): Promise<void> {
-    await this.readableClosed;
+    const writer = this.writer;
+    this.writer = null;
+    if (writer) {
+      // Let queued commands go out, but do not hang on a device that stopped reading.
+      await Promise.race([this.sendQueue, delay(CLOSE_FLUSH_MS)]);
+      writer.releaseLock();
+    }
     await this.port?.close().catch(() => undefined);
-    this.reader = null;
-    this.readableClosed = null;
+    this.readLoop = null;
   }
 }
 

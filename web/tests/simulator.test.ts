@@ -29,6 +29,31 @@ describe('PicoSimulator', () => {
     expect(JSON.parse(sim.command('{"cmd":"x"}', 0)[0]).msg).toBe('unknown cmd');
   });
 
+  it('validates command field types like the firmware', () => {
+    const sim = new PicoSimulator(0);
+    const reply = (line: string) => JSON.parse(sim.command(line, 0)[0]);
+    expect(reply('{"cmd":"led","on":"false"}')).toEqual({ t: 'err', msg: 'on must be true or false', cmd: 'led' });
+    expect(sim.led).toBe(false);
+    expect(reply('{"cmd":"rate","hz":"5"}')).toEqual({ t: 'err', msg: 'hz must be a number', cmd: 'rate' });
+    expect(reply('{"cmd":"blink","n":0}').msg).toBe('n must be an integer 1..20');
+    expect(reply('{"cmd":"blink","n":true}').msg).toBe('n must be an integer 1..20');
+    expect(reply('{"cmd":"blink"}')).toEqual({ t: 'ack', cmd: 'blink', n: 3 });
+    expect(reply('{"cmd":5}')).toEqual({ t: 'err', msg: 'cmd must be a string' });
+  });
+
+  it('restarts the sample schedule on a rate change (0.2 Hz -> 20 Hz is not silent)', () => {
+    const sim = new PicoSimulator(0);
+    sim.command('{"cmd":"rate","hz":0.2}', 0);
+    const tel = (from: number, to: number) => {
+      const out: string[] = [];
+      for (let t = from; t <= to; t += 10) out.push(...sim.tick(t).filter((l) => l.includes('"tel"')));
+      return out;
+    };
+    expect(tel(0, 100)).toHaveLength(1);
+    sim.command('{"cmd":"rate","hz":20}', 110);
+    expect(tel(110, 400).length).toBeGreaterThanOrEqual(5);
+  });
+
   it('warms past a 30 C alert threshold during its warm-up pulse', () => {
     const sim = new PicoSimulator(0);
     expect(sim.trueTemp(1000)).toBeLessThan(27);

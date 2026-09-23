@@ -29,7 +29,31 @@ export function niceTicks(min: number, max: number, maxTicks = 5): number[] {
   return ticks;
 }
 
-const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+interface ThemeColors {
+  grid: string;
+  muted: string;
+  danger: string;
+}
+
+let theme: ThemeColors | null = null;
+
+/**
+ * CSS custom properties used by the charts, read once and cached:
+ * getComputedStyle on every frame forces style work for no benefit.
+ * Call invalidateThemeColors() if the theme ever changes at runtime.
+ */
+export function themeColors(): ThemeColors {
+  if (!theme) {
+    const style = getComputedStyle(document.documentElement);
+    const css = (name: string, fallback: string) => style.getPropertyValue(name).trim() || fallback;
+    theme = { grid: css('--grid', '#223'), muted: css('--muted', '#889'), danger: css('--danger', '#ff5d5d') };
+  }
+  return theme;
+}
+
+export function invalidateThemeColors(): void {
+  theme = null;
+}
 
 /**
  * Minimal real-time line chart on a <canvas>. The x axis is "seconds ago"
@@ -42,6 +66,10 @@ export class TimeChart {
   private height = 0;
   private dpr = 1;
   private lastDraw: { series: Series; now: number } | null = null;
+  /** Derived colours, computed once instead of on every frame. */
+  private readonly fillTop: string;
+  private readonly fillBottom: string;
+  private readonly halo: string;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
@@ -50,6 +78,9 @@ export class TimeChart {
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D not available');
     this.ctx = ctx;
+    this.fillTop = withAlpha(opts.color, 0.22);
+    this.fillBottom = withAlpha(opts.color, 0);
+    this.halo = withAlpha(opts.color, 0.25);
     new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
   }
@@ -105,8 +136,7 @@ export class TimeChart {
     const x = (t: number) => pad.l + ((t - t0) / opts.windowMs) * pw;
     const y = (v: number) => pad.t + (1 - (v - yMin) / (yMax - yMin)) * ph;
 
-    const grid = css('--grid') || '#223';
-    const muted = css('--muted') || '#889';
+    const { grid, muted, danger } = themeColors();
     ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
     ctx.lineWidth = 1;
 
@@ -146,7 +176,6 @@ export class TimeChart {
     // Alert threshold.
     if (thr !== null && thr >= yMin && thr <= yMax) {
       const yy = Math.round(y(thr)) + 0.5;
-      const danger = css('--danger') || '#ff5d5d';
       ctx.save();
       ctx.strokeStyle = danger;
       ctx.lineWidth = 1.5;
@@ -204,8 +233,8 @@ export class TimeChart {
     closeArea();
 
     const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + ph);
-    grad.addColorStop(0, withAlpha(opts.color, 0.22));
-    grad.addColorStop(1, withAlpha(opts.color, 0));
+    grad.addColorStop(0, this.fillTop);
+    grad.addColorStop(1, this.fillBottom);
     ctx.fillStyle = grad;
     ctx.fill(area);
 
@@ -217,7 +246,7 @@ export class TimeChart {
     ctx.restore();
 
     // Latest sample marker.
-    ctx.fillStyle = withAlpha(opts.color, 0.25);
+    ctx.fillStyle = this.halo;
     ctx.beginPath();
     ctx.arc(lastX, lastY, 7, 0, Math.PI * 2);
     ctx.fill();
@@ -228,7 +257,7 @@ export class TimeChart {
   }
 }
 
-function withAlpha(hex: string, alpha: number): string {
+export function withAlpha(hex: string, alpha: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return hex;
   const n = parseInt(m[1], 16);
