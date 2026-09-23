@@ -174,7 +174,7 @@ What helps, and what does not:
 ## Tests
 
 ```bash
-cd web && npm test                                  # Vitest: 69 tests
+cd web && npm test                                  # Vitest: 74 tests
 cd web && npm run build                             # type-check (tsc) + production build
 python -m unittest discover -s firmware/tests -v    # 28 firmware tests (stubbed hardware)
 python -m py_compile firmware/main.py firmware/examples/mqtt_picow.py
@@ -281,7 +281,7 @@ picopulse/
 │   │   ├── lineParser.ts       # chunks -> lines
 │   │   ├── protocol.ts         # message types, validation, command encoding
 │   │   ├── simulator.ts        # fake Pico speaking the same protocol
-│   │   ├── stats.ts            # ring buffers, min/avg/max, threshold alert
+│   │   ├── stats.ts            # ring buffers, min/avg/max, threshold alert + limit validation
 │   │   ├── chart.ts            # canvas time-series chart
 │   │   ├── csv.ts              # CSV export
 │   │   └── style.css

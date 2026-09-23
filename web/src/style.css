@@ -807,6 +807,18 @@ input[type='range']:disabled {
     display: flex;
     flex-direction: column;
   }
+  /* Phones: one column, with Controls before the charts instead of after all of them. */
+  .layout {
+    display: flex;
+    flex-direction: column;
+  }
+  .col-main,
+  .col-side {
+    display: contents;
+  }
+  #card-controls {
+    order: -1;
+  }
   .readout {
     font-size: 32px;
   }

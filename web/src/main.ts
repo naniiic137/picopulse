@@ -111,8 +111,13 @@ async function connectSerial(): Promise<void> {
   try {
     await serial.request();
   } catch (err) {
-    // The user closed the port picker - not an error worth shouting about.
-    if (err instanceof DOMException && err.name === 'NotFoundError') return;
+    // The user closed the port picker: not an error, but say what happened.
+    if (err instanceof DOMException && err.name === 'NotFoundError') {
+      hideError();
+      setStatus('idle', 'No device selected');
+      logEvent('info', 'No device selected. Press Connect Pico to choose a port, or run the simulator.');
+      return;
+    }
     showError(`Could not open the port picker: ${errorText(err)}`);
     return;
   }
