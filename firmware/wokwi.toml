@@ -1,0 +1,13 @@
+# Wokwi for VS Code configuration (not needed on wokwi.com).
+#
+# 1. Download the MicroPython firmware for the Raspberry Pi Pico from
+#    https://micropython.org/download/RPI_PICO/ and save it next to this file
+#    as micropython.uf2 (it is git-ignored).
+# 2. In VS Code run "Wokwi: Start Simulator" with this folder open.
+# 3. While the simulator tab is visible, run:
+#      python -m mpremote connect port:rfc2217://localhost:4000 run main.py
+[wokwi]
+version = 1
+firmware = "micropython.uf2"
+elf = "micropython.uf2"
+rfc2217ServerPort = 4000

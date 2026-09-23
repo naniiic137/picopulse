@@ -1,0 +1,22 @@
+# Node / Vite
+node_modules/
+dist/
+*.local
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+
+# Wokwi for VS Code: download the MicroPython firmware locally (see firmware/wokwi.toml)
+firmware/*.uf2
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Never commit WiFi credentials
+secrets.py

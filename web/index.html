@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Live telemetry from a Raspberry Pi Pico to your browser over USB, using the Web Serial API. No drivers, no server." />
+    <meta name="theme-color" content="#0b0f14" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>PicoPulse</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1.5" y="1.5" width="29" height="29" rx="7" fill="none" stroke="currentColor" stroke-width="2" />
+          <path d="M5 17h5l2.5-6 4 12 3-9 2 3H27" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div>
+          <h1>PicoPulse</h1>
+          <p class="tagline">Raspberry Pi Pico telemetry over Web Serial</p>
+        </div>
+      </div>
+      <div class="conn">
+        <span id="status" class="pill" data-state="idle"><i></i><span id="status-text">Disconnected</span></span>
+        <button id="btn-connect" class="btn primary" type="button">Connect Pico</button>
+        <button id="btn-sim" class="btn" type="button">Run simulator</button>
+        <button id="btn-disconnect" class="btn" type="button" hidden>Disconnect</button>
+      </div>
+    </header>
+
+    <div id="banner-unsupported" class="banner warn" hidden>
+      <strong>Web Serial is not available in this browser.</strong>
+      Connecting to a real Pico needs Chrome or Edge on desktop (on https or localhost).
+      You can still explore everything with the simulator.
+    </div>
+    <div id="banner-sim" class="banner sim" hidden>
+      <span class="badge">Simulator</span>
+      Synthetic data generated in your browser, in exactly the format the Pico firmware sends.
+      No hardware is connected.
+    </div>
+    <div id="banner-error" class="banner error" hidden></div>
+
+    <main class="layout">
+      <section class="col-main">
+        <article class="card chart-card" id="card-temp">
+          <header class="card-head">
+            <div>
+              <h2>Core temperature</h2>
+              <p class="sub">RP2040 internal sensor &middot; ADC4 &middot; 8-sample moving average</p>
+            </div>
+            <div class="readout" data-color="temp"><span id="temp-now">--.-</span><span class="unit">&deg;C</span></div>
+          </header>
+          <div class="chart-wrap tall">
+            <canvas id="chart-temp" aria-label="Temperature over the last 60 seconds" role="img"></canvas>
+            <div class="empty" id="empty-state">
+              <p class="empty-title">No data yet</p>
+              <p>Plug in a Pico running <code>firmware/main.py</code> and press <b>Connect Pico</b>, or press <b>Run simulator</b>.</p>
+            </div>
+          </div>
+          <footer class="stats">
+            <div><span class="k">Min</span><span class="v" id="temp-min">--</span></div>
+            <div><span class="k">Avg</span><span class="v" id="temp-avg">--</span></div>
+            <div><span class="k">Max</span><span class="v" id="temp-max">--</span></div>
+            <div><span class="k">Samples</span><span class="v" id="temp-count">0</span></div>
+            <div class="window">last 60 s</div>
+          </footer>
+        </article>
+
+        <div class="pair">
+          <article class="card chart-card" id="card-adc">
+            <header class="card-head">
+              <div>
+                <h2>Analog input</h2>
+                <p class="sub">GP26 / ADC0 &middot; potentiometer or LDR</p>
+              </div>
+              <div class="readout small" data-color="adc"><span id="adc-now">--</span><span class="unit">%</span></div>
+            </header>
+            <div class="chart-wrap">
+              <canvas id="chart-adc" aria-label="ADC0 over the last 60 seconds" role="img"></canvas>
+              <div class="chart-note" id="adc-note" hidden>Nothing wired to GP26 &mdash; see the wiring guide.</div>
+            </div>
+            <footer class="stats compact">
+              <div><span class="k">Min</span><span class="v" id="adc-min">--</span></div>
+              <div><span class="k">Avg</span><span class="v" id="adc-avg">--</span></div>
+              <div><span class="k">Max</span><span class="v" id="adc-max">--</span></div>
+            </footer>
+          </article>
+
+          <article class="card chart-card" id="card-mem">
+            <header class="card-head">
+              <div>
+                <h2>Free heap</h2>
+                <p class="sub">gc.mem_free() &middot; collected every heartbeat</p>
+              </div>
+              <div class="readout small" data-color="mem"><span id="mem-now">--</span><span class="unit">KB</span></div>
+            </header>
+            <div class="chart-wrap">
+              <canvas id="chart-mem" aria-label="Free memory over the last 60 seconds" role="img"></canvas>
+            </div>
+            <footer class="stats compact">
+              <div><span class="k">Min</span><span class="v" id="mem-min">--</span></div>
+              <div><span class="k">Avg</span><span class="v" id="mem-avg">--</span></div>
+              <div><span class="k">Max</span><span class="v" id="mem-max">--</span></div>
+            </footer>
+          </article>
+        </div>
+
+        <article class="card" id="card-raw">
+          <div class="card-title-row">
+            <h2>Serial monitor</h2>
+            <span class="muted">newline-delimited JSON &middot; <span class="rx">&larr; device</span> <span class="tx">&rarr; host</span></span>
+          </div>
+          <div id="raw" class="raw" role="log" aria-label="Raw serial lines"></div>
+        </article>
+      </section>
+
+      <aside class="col-side">
+        <article class="card" id="card-controls">
+          <h2>Controls</h2>
+          <div class="control-row">
+            <div>
+              <span class="label">Onboard LED</span>
+              <span class="hint" id="led-hint">GP25 / "LED"</span>
+            </div>
+            <div class="row-actions">
+              <button id="btn-led" class="switch" role="switch" aria-checked="false" type="button" disabled>
+                <span class="knob"></span><span class="sr-only">Toggle LED</span>
+              </button>
+              <button id="btn-blink" class="btn small" type="button" disabled>Blink</button>
+            </div>
+          </div>
+          <div class="control-row column">
+            <div class="label-line">
+              <label class="label" for="rate">Sample rate</label>
+              <output id="rate-out" for="rate">2 Hz</output>
+            </div>
+            <input id="rate" type="range" min="0" max="6" step="1" value="3" disabled />
+            <div class="ticks"><span>0.2</span><span>0.5</span><span>1</span><span>2</span><span>5</span><span>10</span><span>20</span></div>
+          </div>
+          <div class="control-row">
+            <div>
+              <label class="label" for="threshold">Temperature alert</label>
+              <span class="hint">fires at or above, 0.5&deg; hysteresis</span>
+            </div>
+            <div class="num">
+              <input id="threshold" type="number" step="0.5" min="-10" max="80" value="30" inputmode="decimal" />
+              <span>&deg;C</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card" id="card-alerts">
+          <div class="card-title-row">
+            <h2>Alerts &amp; events</h2>
+            <span id="alert-chip" class="chip ok">Normal</span>
+          </div>
+          <ol id="log" class="log" aria-live="polite"></ol>
+        </article>
+
+        <article class="card" id="card-device">
+          <h2>Device</h2>
+          <dl class="info">
+            <dt>Board</dt><dd id="i-board">&mdash;</dd>
+            <dt>Firmware</dt><dd id="i-fw">&mdash;</dd>
+            <dt>Protocol</dt><dd id="i-proto">&mdash;</dd>
+            <dt>Unique ID</dt><dd id="i-uid" class="mono">&mdash;</dd>
+            <dt>MicroPython</dt><dd id="i-mpy">&mdash;</dd>
+            <dt>Link</dt><dd id="i-link">&mdash;</dd>
+            <dt>Uptime</dt><dd id="i-uptime" class="mono">&mdash;</dd>
+            <dt>Rate</dt><dd id="i-rate" class="mono">&mdash;</dd>
+            <dt>Messages</dt><dd id="i-msgs" class="mono">&mdash;</dd>
+            <dt>Last heartbeat</dt><dd id="i-hb" class="mono">&mdash;</dd>
+          </dl>
+        </article>
+
+        <article class="card" id="card-session">
+          <div class="card-title-row">
+            <h2>Session</h2>
+            <span id="rows" class="muted mono">0 rows</span>
+          </div>
+          <div class="btn-row">
+            <button id="btn-pause" class="btn small" type="button" aria-pressed="false">Pause</button>
+            <button id="btn-clear" class="btn small" type="button">Clear</button>
+            <button id="btn-csv" class="btn small" type="button" disabled>Export CSV</button>
+          </div>
+        </article>
+      </aside>
+    </main>
+
+    <footer class="foot">
+      <span>PicoPulse &middot; protocol v1 &middot; data stays in your browser</span>
+      <a href="https://github.com/naniiic137/picopulse">Source on GitHub</a>
+    </footer>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

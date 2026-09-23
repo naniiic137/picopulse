@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="470" viewBox="0 0 880 470" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <title>PicoPulse wiring: optional potentiometer on GP26 / ADC0</title>
+  <rect width="880" height="470" rx="14" fill="#0d1218"/>
+  <text x="32" y="44" fill="#dbe4ee" font-size="20" font-weight="600">Optional wiring: potentiometer on GP26 / ADC0</text>
+  <text x="32" y="68" fill="#7a8898" font-size="13">Nothing is required: the temperature sensor and the LED are on the board. Board seen from the top, USB at the top.</text>
+
+  <!-- Pico board; right-hand header shown (pins 40..30, top to bottom) -->
+  <g transform="translate(120 96)">
+    <rect x="0" y="0" width="190" height="340" rx="8" fill="#1f6b3a" stroke="#2f8f52" stroke-width="2"/>
+    <rect x="70" y="-14" width="50" height="26" rx="4" fill="#b9c2cc" stroke="#8a949e"/>
+    <rect x="22" y="36" width="12" height="7" rx="1.5" fill="#7dffb3"/>
+    <text x="22" y="58" fill="#cfe9d8" font-size="10">LED (GP25)</text>
+    <rect x="36" y="250" width="66" height="50" rx="4" fill="#1b1f24" stroke="#3a4048"/>
+    <text x="69" y="279" fill="#8b96a1" font-size="11" text-anchor="middle">RP2040</text>
+    <text x="95" y="326" fill="#cfe9d8" font-size="13" font-weight="600" text-anchor="middle">Raspberry Pi Pico</text>
+    <g font-size="11">
+      <circle cx="176" cy="30" r="5" fill="#d9b45a"/><text x="162" y="34" text-anchor="end" fill="#cfe9d8">40 VBUS</text>
+      <circle cx="176" cy="50" r="5" fill="#d9b45a"/><text x="162" y="54" text-anchor="end" fill="#cfe9d8">39 VSYS</text>
+      <circle cx="176" cy="70" r="5" fill="#d9b45a"/><text x="162" y="74" text-anchor="end" fill="#cfe9d8">38 GND</text>
+      <circle cx="176" cy="90" r="5" fill="#d9b45a"/><text x="162" y="94" text-anchor="end" fill="#cfe9d8">37 3V3_EN</text>
+      <circle cx="176" cy="110" r="6" fill="#ff5d5d"/><text x="162" y="114" text-anchor="end" fill="#ffffff" font-weight="700">36 3V3(OUT)</text>
+      <circle cx="176" cy="130" r="5" fill="#d9b45a"/><text x="162" y="134" text-anchor="end" fill="#cfe9d8">35 ADC_VREF</text>
+      <circle cx="176" cy="150" r="5" fill="#d9b45a"/><text x="162" y="154" text-anchor="end" fill="#cfe9d8">34 GP28</text>
+      <circle cx="176" cy="170" r="6" fill="#9aa5b1"/><text x="162" y="174" text-anchor="end" fill="#ffffff" font-weight="700">33 AGND</text>
+      <circle cx="176" cy="190" r="5" fill="#d9b45a"/><text x="162" y="194" text-anchor="end" fill="#cfe9d8">32 GP27</text>
+      <circle cx="176" cy="210" r="6" fill="#4cc9f0"/><text x="162" y="214" text-anchor="end" fill="#ffffff" font-weight="700">31 GP26 / ADC0</text>
+      <circle cx="176" cy="230" r="5" fill="#d9b45a"/><text x="162" y="234" text-anchor="end" fill="#cfe9d8">30 RUN</text>
+    </g>
+  </g>
+
+  <!-- wires (pin x = 296; 3V3 y=206, AGND y=266, GP26 y=306) -->
+  <g fill="none" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M302 206 H500 V236 H568" stroke="#ff5d5d"/>
+    <path d="M302 266 H470 V336 H568" stroke="#9aa5b1"/>
+    <!-- the wiper wire hops over the ground wire (no connection) -->
+    <path d="M302 306 H461 A9 9 0 0 1 479 306 H520 V286 H568" stroke="#4cc9f0"/>
+  </g>
+
+  <!-- potentiometer, legs pointing left -->
+  <g>
+    <rect x="596" y="206" width="36" height="160" rx="5" fill="#1a222c" stroke="#3a4757" stroke-width="2"/>
+    <line x1="568" y1="236" x2="596" y2="236" stroke="#b9c2cc" stroke-width="4"/>
+    <line x1="568" y1="286" x2="596" y2="286" stroke="#b9c2cc" stroke-width="4"/>
+    <line x1="568" y1="336" x2="596" y2="336" stroke="#b9c2cc" stroke-width="4"/>
+    <circle cx="690" cy="286" r="50" fill="#1a222c" stroke="#3a4757" stroke-width="2"/>
+    <circle cx="690" cy="286" r="30" fill="#2b3644" stroke="#50627a" stroke-width="2"/>
+    <line x1="690" y1="286" x2="709" y2="265" stroke="#dbe4ee" stroke-width="4" stroke-linecap="round"/>
+    <rect x="632" y="276" width="10" height="20" fill="#1a222c" stroke="#3a4757" stroke-width="2"/>
+    <text x="690" y="370" fill="#dbe4ee" font-size="14" font-weight="600" text-anchor="middle">10 kΩ potentiometer</text>
+  </g>
+  <g font-size="11.5">
+    <text x="572" y="226" fill="#ff9d9d">outer</text>
+    <text x="572" y="276" fill="#8fdcf5">wiper</text>
+    <text x="572" y="326" fill="#c3cbd4">outer</text>
+  </g>
+
+  <!-- legend -->
+  <g font-size="12.5">
+    <text x="470" y="112" fill="#dbe4ee" font-weight="600">Connections</text>
+    <circle cx="476" cy="130" r="5" fill="#ff5d5d"/><text x="488" y="134" fill="#c3cbd4">pin 36 3V3(OUT) → pot outer leg</text>
+    <circle cx="476" cy="150" r="5" fill="#4cc9f0"/><text x="488" y="154" fill="#c3cbd4">pin 31 GP26 / ADC0 → pot wiper (middle)</text>
+    <circle cx="476" cy="170" r="5" fill="#9aa5b1"/><text x="488" y="174" fill="#c3cbd4">pin 33 AGND → pot other outer leg</text>
+  </g>
+  <g font-size="12.5" fill="#7a8898">
+    <text x="470" y="408" fill="#dbe4ee" font-weight="600">LDR instead?</text>
+    <text x="560" y="408">3V3 → LDR → GP26 → 10 kΩ → AGND</text>
+    <text x="470" y="428">More light gives a higher ADC0 reading.</text>
+    <text x="470" y="452" fill="#f6c453">Never connect GP26 to 5 V / VBUS: ADC inputs take 3.3 V max.</text>
+  </g>
+</svg>
