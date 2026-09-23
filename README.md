@@ -219,4 +219,4 @@ Hamza Ben Ismail ([@naniiic137](https://github.com/naniiic137)), Tunisia.
 
 ## License
 
-Not chosen yet.
+© 2026 Hamza Ben Ismail. All rights reserved.
