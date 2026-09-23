@@ -3,7 +3,7 @@ import { TimeChart } from './chart';
 import { toCsv } from './csv';
 import { LineParser } from './lineParser';
 import { encodeCommand, parseLine, type Command, type DeviceMsg, type HelloMsg, type TelemetryMsg } from './protocol';
-import { Series, ThresholdAlert, measuredRate } from './stats';
+import { DEFAULT_THRESHOLD, Series, ThresholdAlert, measuredRate, parseThreshold } from './stats';
 import { AnnounceThrottle, RedrawGate, RowBuffer, SeqTracker, formatUptime, nearestRateIndex } from './session';
 import { SerialTransport, SimTransport, isWebSerialSupported, type Transport } from './transport';
 
@@ -35,6 +35,7 @@ const el = {
   rate: $<HTMLInputElement>('rate'),
   rateOut: $<HTMLOutputElement>('rate-out'),
   threshold: $<HTMLInputElement>('threshold'),
+  thresholdError: $('threshold-error'),
   alertChip: $('alert-chip'),
   log: $<HTMLOListElement>('log'),
   pause: $<HTMLButtonElement>('btn-pause'),
@@ -426,11 +427,22 @@ function shortMpy(v: string): string {
 
 function loadThreshold(): number {
   try {
-    const v = Number(localStorage.getItem('picopulse.threshold'));
-    return Number.isFinite(v) && v !== 0 ? v : 30;
+    const parsed = parseThreshold(localStorage.getItem('picopulse.threshold'));
+    return parsed.ok ? parsed.value : DEFAULT_THRESHOLD;
   } catch {
-    return 30;
+    return DEFAULT_THRESHOLD;
   }
+}
+
+/** Shows or clears the inline error under the alert limit. Returns the valid value, if any. */
+function checkThreshold(): number | null {
+  const parsed = parseThreshold(el.threshold.value);
+  // A number input reports "" for text it cannot parse; badInput tells that apart from empty.
+  const error = el.threshold.validity?.badInput ? 'Enter a number, e.g. 30 or 42.5.' : parsed.ok ? null : parsed.error;
+  el.threshold.setAttribute('aria-invalid', String(!!error));
+  el.thresholdError.hidden = !error;
+  el.thresholdError.textContent = error ? `${error} Still alerting at ${alert.threshold} °C.` : '';
+  return error || !parsed.ok ? null : parsed.value;
 }
 
 function download(name: string, text: string): void {
@@ -458,9 +470,14 @@ el.rate.addEventListener('input', () => {
 });
 el.rate.addEventListener('change', () => void sendCommand({ cmd: 'rate', hz: RATES[Number(el.rate.value)] }));
 el.threshold.value = String(alert.threshold);
+el.threshold.addEventListener('input', () => {
+  // Clear the error as soon as the value is fixed; new errors wait for "change".
+  if (el.threshold.getAttribute('aria-invalid') === 'true') checkThreshold();
+});
 el.threshold.addEventListener('change', () => {
-  const v = Number(el.threshold.value);
-  if (!Number.isFinite(v)) return;
+  // Invalid input keeps the last valid limit (empty is not 0 °C).
+  const v = checkThreshold();
+  if (v === null || v === alert.threshold) return;
   alert.threshold = v;
   alert.active = false;
   try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Series, ThresholdAlert, measuredRate, summarize } from '../src/stats';
+import { Series, THRESHOLD_MAX, THRESHOLD_MIN, ThresholdAlert, measuredRate, parseThreshold, summarize } from '../src/stats';
 
 describe('summarize', () => {
   it('computes min, max and mean', () => {
@@ -65,5 +65,41 @@ describe('measuredRate', () => {
   it('estimates messages per second from arrival times', () => {
     expect(measuredRate([0, 100, 200, 300, 400])).toBeCloseTo(10);
     expect(measuredRate([0])).toBe(0);
+  });
+});
+
+describe('parseThreshold', () => {
+  it('accepts temperatures in the RP2040 sensor range', () => {
+    expect(parseThreshold('30')).toEqual({ ok: true, value: 30 });
+    expect(parseThreshold(' 42.5 ')).toEqual({ ok: true, value: 42.5 });
+    expect(parseThreshold('42,5')).toEqual({ ok: true, value: 42.5 });
+    expect(parseThreshold('0')).toEqual({ ok: true, value: 0 });
+    expect(parseThreshold('-0')).toEqual({ ok: true, value: 0 });
+    expect(parseThreshold(String(THRESHOLD_MIN))).toEqual({ ok: true, value: -40 });
+    expect(parseThreshold(String(THRESHOLD_MAX))).toEqual({ ok: true, value: 125 });
+  });
+
+  it('does not treat an empty field as 0 °C', () => {
+    for (const raw of ['', '   ', null, undefined]) {
+      expect(parseThreshold(raw)).toEqual({ ok: false, error: 'Enter a temperature.' });
+    }
+  });
+
+  it('rejects values outside -40..125 °C', () => {
+    for (const raw of ['-500', '1e9', '125.5', '-40.1', '1e3']) {
+      const r = parseThreshold(raw);
+      expect(r.ok, raw).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/-40 to 125 °C/);
+    }
+  });
+
+  it('rejects text that is not a number', () => {
+    for (const raw of ['abc', '30C', '1.2.3', 'NaN', 'Infinity', '--5', '0x20']) {
+      expect(parseThreshold(raw).ok, raw).toBe(false);
+    }
+  });
+
+  it('accepts exponent notation only when the result is in range', () => {
+    expect(parseThreshold('3e1')).toEqual({ ok: true, value: 30 });
   });
 });

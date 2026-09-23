@@ -102,6 +102,29 @@ export class ThresholdAlert {
   }
 }
 
+/** The RP2040 temperature sensor's rated range: an alert outside it could never fire (or always would). */
+export const THRESHOLD_MIN = -40;
+export const THRESHOLD_MAX = 125;
+export const DEFAULT_THRESHOLD = 30;
+
+export type ThresholdParse = { ok: true; value: number } | { ok: false; error: string };
+
+/**
+ * Validates the alert limit typed by the user. Empty is not 0 °C, and
+ * "1e9" or "-500" are not temperatures the Pico can report.
+ */
+export function parseThreshold(raw: string | null | undefined): ThresholdParse {
+  const text = (raw ?? '').trim().replace(',', '.');
+  if (text === '') return { ok: false, error: 'Enter a temperature.' };
+  if (!/^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(text)) return { ok: false, error: 'Enter a number, e.g. 30 or 42.5.' };
+  const value = Number(text);
+  if (value < THRESHOLD_MIN || value > THRESHOLD_MAX) {
+    return { ok: false, error: `Use ${THRESHOLD_MIN} to ${THRESHOLD_MAX} °C, the RP2040 sensor range.` };
+  }
+  // -0 would be displayed as "0" but stored as "-0".
+  return { ok: true, value: value === 0 ? 0 : value };
+}
+
 /** Rolling rate estimate (messages per second) from arrival timestamps. */
 export function measuredRate(times: readonly number[]): number {
   if (times.length < 2) return 0;

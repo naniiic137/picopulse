@@ -570,6 +570,22 @@ input[type='range']:disabled {
   gap: 6px;
   color: var(--muted);
 }
+.control-row.wrap {
+  flex-wrap: wrap;
+}
+.field-error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+}
+.field-error[hidden] {
+  display: none;
+}
+.num input[aria-invalid='true'] {
+  border-color: var(--danger);
+  outline-color: var(--danger);
+}
 .num input {
   width: 74px;
   padding: 6px 8px;

@@ -137,15 +137,16 @@
             <input id="rate" type="range" min="0" max="6" step="1" value="3" disabled />
             <div class="ticks"><span>0.2</span><span>0.5</span><span>1</span><span>2</span><span>5</span><span>10</span><span>20</span></div>
           </div>
-          <div class="control-row">
+          <div class="control-row wrap">
             <div>
               <label class="label" for="threshold">Temperature alert</label>
-              <span class="hint">fires at or above, 0.5&deg; hysteresis</span>
+              <span class="hint" id="threshold-hint">fires at or above, 0.5&deg; hysteresis &middot; -40 to 125 &deg;C</span>
             </div>
             <div class="num">
-              <input id="threshold" type="number" step="0.5" min="-10" max="80" value="30" inputmode="decimal" />
+              <input id="threshold" type="number" step="0.5" min="-40" max="125" value="30" inputmode="decimal" required aria-describedby="threshold-hint threshold-error" />
               <span>&deg;C</span>
             </div>
+            <p class="field-error" id="threshold-error" hidden></p>
           </div>
         </article>
 
