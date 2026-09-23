@@ -34,8 +34,8 @@ Every message has a type field `t`.
 ### `hello` — sent at boot and in reply to `{"cmd":"info"}`
 
 ```json
-{"t": "hello", "v": 1, "fw": "0.1.0", "board": "pico", "uid": "e6605838832a4f21",
- "mpy": "3.4.0; MicroPython v1.22.0 on 2023-12-27", "hz": 2, "adc0": "auto", "window": 8}
+{"t": "hello", "v": 1, "fw": "0.2.0", "board": "pico", "uid": "e6605838832a4f21",
+ "mpy": "3.4.0; MicroPython v1.22.0 on 2023-12-27", "hz": 2, "adc0": "off", "window": 8}
 ```
 
 | field    | type   | required | meaning |
@@ -46,7 +46,7 @@ Every message has a type field `t`.
 | `uid`    | string | yes | `machine.unique_id()` as hex (flash chip ID) |
 | `hz`     | number | yes | current telemetry rate |
 | `mpy`    | string | no  | `sys.version` |
-| `adc0`   | string | no  | ADC0 mode: `"auto"`, `"on"` or `"off"` |
+| `adc0`   | string | no  | ADC0 mode in effect: `"off"` (default), `"on"` or `"auto"` |
 | `window` | number | no  | moving-average window size |
 
 The hello is printed at boot, usually before any host has opened the port, so
@@ -62,7 +62,7 @@ the dashboard sends `{"cmd":"info"}` right after connecting to get it again.
 | field      | type           | required | meaning |
 |------------|----------------|----------|---------|
 | `seq`      | integer        | yes | increments by 1 per `tel`; a gap means lost lines, a drop means the board restarted |
-| `ms`       | integer        | yes | milliseconds since the firmware started |
+| `ms`       | integer        | yes | milliseconds since the firmware started; keeps increasing past the ~6.2-day `ticks_ms()` wrap (accumulated in a Python int) |
 | `temp`     | number \| null | yes | internal sensor, °C, moving average over `window` samples; `null` if the raw reading is implausible (see below) |
 | `temp_raw` | number \| null | no  | the same reading without smoothing |
 | `adc0`     | number \| null | yes | GP26 voltage as a fraction of 3.3 V (0..1), smoothed; `null` when nothing is wired |
@@ -77,16 +77,20 @@ V    = raw * 3.3 / 65535
 temp = 27 - (V - 0.706) / 0.001721
 ```
 
-The sensor measures the chip itself, so it reads a few degrees above room
-temperature and is noisy (±1 °C sample-to-sample is normal); hence the moving
-average. Raw values below 5000 (≈0.25 V) are reported as `null`: a real
-sensor sits around 0.7 V, and the Wokwi simulator always returns 0.
+`raw` is the mean of 16 consecutive reads (`TEMP_OVERSAMPLE`), which lowers
+ADC noise. The sensor measures the die, not the room: it reads above room
+temperature, and its absolute error is a few °C (see the README's
+"Temperature accuracy"); hence "good for trends, not a thermometer".
+Raw values below 5000 (≈0.25 V) are reported as `null`: a real sensor sits
+around 0.7 V, and the Wokwi simulator always returns 0.
 
-**ADC0 "not connected"**: in `auto` mode the firmware re-checks every 3 s by
-reading GP26 once with the internal pull-up and once with the pull-down. A
-floating pin follows the pull (large difference); a potentiometer or divider
-holds its voltage (small difference). This is a heuristic — see the README's
-hardware-testing notes.
+**ADC0** depends on `ADC0_MODE` in `main.py`: `"off"` (default) always sends
+`null`, `"on"` always reads GP26. `"auto"` is opt-in: every 3 s it switches
+the GP26 pad's pull-up and then pull-down on for 2 ms each (by writing the
+RP2040 pad register and restoring it, no objects allocated) and compares the
+readings. A floating pin follows the pull (large difference); a potentiometer
+or divider holds its voltage (small difference). This is a heuristic that has
+not been verified on hardware yet.
 
 ### `hb` — heartbeat, every 5 s
 
@@ -96,6 +100,10 @@ hardware-testing notes.
 
 Proves the main loop is alive even at very low telemetry rates. The firmware
 also runs `gc.collect()` at each heartbeat (visible as a jump in `mem`).
+
+If the loop stalls (for example a long blocking write), the next `tel` and
+`hb` are sent once and the schedule restarts from there — no burst of
+catch-up messages.
 
 ### `ack` — a command succeeded
 
@@ -112,22 +120,47 @@ also runs `gc.collect()` at each heartbeat (visible as a jump in `mem`).
 ```
 
 `msg` is human-readable. `cmd` is present when the command name was readable.
-Possible `msg` values in v1: `bad json`, `missing cmd`, `unknown cmd`,
-`hz must be a number`, `hz out of range 0.2..20`, `line too long` (> 256 chars).
+Possible `msg` values in v1: `bad json`, `missing cmd`, `cmd must be a string`,
+`unknown cmd`, `on must be true or false`, `hz must be a number`,
+`hz out of range 0.2..20`, `n must be an integer 1..20`, `line too long`
+(> 256 chars).
+
+The firmware also uses `err` (without `cmd`) for unexpected exceptions in its
+main loop, which it survives instead of dropping to the REPL:
+
+```json
+{"t": "err", "msg": "internal error: OSError: [Errno 5] EIO (+12 suppressed)"}
+```
+
+These are rate-limited to one per second; `(+N suppressed)` counts the ones
+that were not sent in between.
 
 ## Host → device (commands)
 
-One JSON object per line with a `cmd` field. The firmware reads stdin without
-blocking (`uselect.poll`), so commands are handled between samples.
+One JSON object per line with a `cmd` field (a string). The firmware reads
+stdin without blocking (`uselect.poll`), so commands are handled between
+samples. Field types are checked strictly: `"on": "false"` or `"hz": "5"`
+(strings) and `"n": true` are rejected with an `err`, not coerced.
 
 | command | example | effect | reply |
 |---------|---------|--------|-------|
-| `led`   | `{"cmd":"led","on":true}` | set the onboard LED (omit `on` to toggle); cancels a blink | `ack` with `on` |
-| `blink` | `{"cmd":"blink","n":3}` | blink `n` times (1–20, default 3), 120 ms per step, without blocking, then restore the LED state | `ack` with `n` |
-| `rate`  | `{"cmd":"rate","hz":10}` | telemetry rate, 0.2–20 Hz | `ack` with `hz`, or `err` |
+| `led`   | `{"cmd":"led","on":true}` | set the onboard LED; `on` must be a boolean (omit it to toggle); cancels a blink | `ack` with `on`, or `err` |
+| `blink` | `{"cmd":"blink","n":3}` | blink `n` times (integer 1–20, default 3), 120 ms per step, without blocking, then restore the LED state | `ack` with `n`, or `err` |
+| `rate`  | `{"cmd":"rate","hz":10}` | telemetry rate, a number 0.2–20 Hz; the next sample is sent right away and the schedule restarts from there | `ack` with `hz`, or `err` |
 | `info`  | `{"cmd":"info"}` | re-send `hello` | `hello` |
-| `ping`  | `{"cmd":"ping"}` | round-trip check | `ack` with the device's `ms` |
+| `ping`  | `{"cmd":"ping"}` | round-trip check | `ack` with the device's uptime `ms` |
 | `reset_stats` | `{"cmd":"reset_stats"}` | clear the moving averages | `ack` |
+
+## Flow control
+
+Each message is written with a single `write()` call. On current MicroPython
+rp2 builds, output is dropped while no host has the port open (DTR not
+asserted); if a host has it open but does not read, a write waits up to
+~500 ms for buffer space and then drops the rest. The firmware keeps running
+either way; a truncated line is reported and skipped by the dashboard's
+parser. The dashboard opens the port with a 64 KiB read buffer and, after a
+non-fatal read error (e.g. a buffer overrun), reopens the reader instead of
+disconnecting.
 
 ## Rate limits
 
